@@ -1,8 +1,5 @@
-
-import 'package:code_lfa/utils.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:global_repository/global_repository.dart';
 import 'package:xterm/xterm.dart';
 
 import 'terminal_controller.dart';
@@ -68,7 +65,7 @@ class _TerminalPageState extends State<TerminalPage> {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const LoadingProgress(
+                              LoadingProgress(
                                 minRadius: 6,
                                 strokeWidth: 3,
                                 increaseRadius: 3,
