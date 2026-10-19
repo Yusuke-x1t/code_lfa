@@ -1,3 +1,4 @@
+
 name: code_lfa
 description: VS Code for Android
 publish_to: "none"
@@ -11,11 +12,6 @@ dependencies:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
-
-  signale:
-    git:
-      url: https://github.com/nightmare-space/signale
-      ref: 2ac68b401296b06b80dbcf47e777d742b82660f0
 
   intl: ^0.19.0
   archive: ^4.0.7
