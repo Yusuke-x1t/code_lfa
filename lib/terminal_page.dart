@@ -22,12 +22,15 @@ class _TerminalPageState extends State<TerminalPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: visible ? terminalTheme.background : Theme.of(context).colorScheme.surface,
+      backgroundColor: visible
+          ? terminalTheme.background
+          : Theme.of(context).colorScheme.surface,
       body: SafeArea(
         child: PopScope(
           onPopInvokedWithResult: (didPop, result) {
-            controller.pseudoTerminal!.writeString('\x03');
-            Get.back();
+            if (didPop) {
+              controller.pseudoTerminal?.writeString('\x03');
+            }
           },
           canPop: true,
           child: GestureDetector(
@@ -40,10 +43,9 @@ class _TerminalPageState extends State<TerminalPage> {
               alignment: Alignment.center,
               children: [
                 Padding(
-                  padding: EdgeInsets.all(8.w),
+                  padding: const EdgeInsets.all(8.0),
                   child: Visibility(
                     visible: visible,
-                    // IgnorePointer
                     child: AbsorbPointer(
                       absorbing: false,
                       child: TerminalView(
@@ -57,12 +59,12 @@ class _TerminalPageState extends State<TerminalPage> {
                 ),
                 Center(
                   child: Material(
-                    borderRadius: BorderRadius.circular(12.w),
+                    borderRadius: BorderRadius.circular(12.0),
                     color: Theme.of(context).colorScheme.surface,
                     child: SizedBox(
-                      width: 300.w,
+                      width: 300.0,
                       child: Padding(
-                        padding: EdgeInsets.all(12.w),
+                        padding: const EdgeInsets.all(12.0),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -76,42 +78,53 @@ class _TerminalPageState extends State<TerminalPage> {
                                 ),
                               ),
                             ),
-                            SizedBox(height: 12.w),
-                            GetBuilder<HomeController>(builder: (controller) {
-                              return Column(
-                                children: [
-                                  Stack(
-                                    children: [
-                                      Container(
-                                        height: 5.w,
-                                        decoration: BoxDecoration(
-                                          color: Theme.of(context).colorScheme.primary.opacity02,
-                                          borderRadius: BorderRadius.circular(3.w),
+                            const SizedBox(height: 12.0),
+                            GetBuilder<HomeController>(
+                              builder: (controller) {
+                                return Column(
+                                  children: [
+                                    Stack(
+                                      children: [
+                                        Container(
+                                          height: 5.0,
+                                          decoration: BoxDecoration(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .primary
+                                                .withValues(alpha: 0.02),
+                                            borderRadius:
+                                                BorderRadius.circular(3.0),
+                                          ),
                                         ),
-                                      ),
-                                      AnimatedContainer(
-                                        duration: 300.milliseconds,
-                                        height: 5.w,
-                                        width: 300.w * controller.progress,
-                                        decoration: BoxDecoration(
-                                          color: Theme.of(context).colorScheme.primary,
-                                          borderRadius: BorderRadius.circular(3.w),
+                                        AnimatedContainer(
+                                          duration: 300.milliseconds,
+                                          height: 5.0,
+                                          width: 300.0 * controller.progress,
+                                          decoration: BoxDecoration(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .primary,
+                                            borderRadius:
+                                                BorderRadius.circular(3.0),
+                                          ),
                                         ),
-                                      ),
-                                    ],
-                                  ),
-                                  SizedBox(height: 8.w),
-                                  Text(
-                                    controller.currentProgress.trim(),
-                                    style: TextStyle(
-                                      fontSize: 12.w,
-                                      fontWeight: FontWeight.bold,
-                                      color: Theme.of(context).colorScheme.onSurface,
+                                      ],
                                     ),
-                                  ),
-                                ],
-                              );
-                            }),
+                                    const SizedBox(height: 8.0),
+                                    Text(
+                                      controller.currentProgress.trim(),
+                                      style: TextStyle(
+                                        fontSize: 12.0,
+                                        fontWeight: FontWeight.bold,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurface,
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
                           ],
                         ),
                       ),
