@@ -1,4 +1,10 @@
+
 dependency_overrides:
+  signale:
+    git:
+      url: https://github.com/nightmare-space/signale
+      ref: 2ac68b401296b06b80dbcf47e777d742b82660f0
+
   permission_handler: ^11.3.1
   device_info_plus: ^10.1.2
   intl: 0.20.2
