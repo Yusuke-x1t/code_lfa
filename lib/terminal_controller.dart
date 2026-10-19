@@ -1,3 +1,4 @@
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -16,6 +17,7 @@ import 'utils.dart';
 
 class HomeController extends GetxController {
   bool vsCodeStaring = false;
+  bool webviewHasOpen = false;
 
   SettingNode privacySetting = 'privacy'.setting;
 
@@ -31,10 +33,11 @@ class HomeController extends GetxController {
     },
   );
 
-  bool webviewHasOpen = false;
+  final File progressFile =
+      File('${RuntimeEnvir.tmpPath}/progress');
 
-  File progressFile = File('${RuntimeEnvir.tmpPath}/progress');
-  File progressDesFile = File('${RuntimeEnvir.tmpPath}/progress_des');
+  final File progressDesFile =
+      File('${RuntimeEnvir.tmpPath}/progress_des');
 
   double progress = 0.0;
   double step = 16;
@@ -42,6 +45,7 @@ class HomeController extends GetxController {
 
   Timer? _progressTimer;
   bool _readingProgress = false;
+  StreamSubscription<String>? _terminalOutputSubscription;
 
   void bumpProgress() {
     try {
@@ -71,143 +75,12 @@ class HomeController extends GetxController {
     }
   }
 
-  Future<void> vsCodeStartWhenSuccessBind() async {
-    terminal.writeProgress(
-      '${S.current.listen_vscode_start}...',
-    );
-
-    final Completer<void> completer = Completer<void>();
-
-    const Utf8Decoder decoder = Utf8Decoder(
-      allowMalformed: true,
-    );
-
-    String recentOutput = '';
-
-    pseudoTerminal!.output
-        .cast<List<int>>()
-        .transform(decoder)
-        .listen(
-      (event) {
-        recentOutput += event;
-
-        if (recentOutput.length > 8192) {
-          recentOutput = recentOutput.substring(
-            recentOutput.length - 4096,
-          );
-        }
-
-        final String address =
-            'http://0.0.0.0:${Config.port}';
-
-        if (!completer.isCompleted &&
-            recentOutput.contains(address)) {
-          completer.complete();
-        }
-
-        terminal.write(event);
-      },
-      onError: (Object error) {
-        Log.e('Terminal output failed -> $error');
-
-        if (!completer.isCompleted) {
-          completer.completeError(error);
-        }
-      },
-    );
-
-    try {
-      await completer.future;
-    } catch (e) {
-      Log.e('Waiting for Code Server failed -> $e');
-      return;
-    }
-
-    bumpProgress();
-
-    await Future.delayed(
-      const Duration(milliseconds: 100),
-    );
-
-    webviewHasOpen = true;
-    update();
-
-    openWebView();
-
-    Future.delayed(
-      const Duration(milliseconds: 2000),
-      () {
-        vsCodeStaring = false;
-        update();
-      },
-    );
-  }
-
-  Future<void> initEnvir() async {
-    final List<String> androidFiles = [
-      'libbash.so',
-      'libbusybox.so',
-      'liblibtalloc.so.2.so',
-      'libloader.so',
-      'libproot.so',
-      'libsudo.so',
-    ];
-
-    final String libPath = await getLibPath();
-
-    Log.i('libPath -> $libPath');
-
-    for (int i = 0; i < androidFiles.length; i++) {
-      final String sourcePath =
-          '$libPath/${androidFiles[i]}';
-
-      final String fileName = androidFiles[i]
-          .replaceAll(RegExp('^lib|\\.so\$'), '');
-
-      final String filePath =
-          '${RuntimeEnvir.binPath}/$fileName';
-
-      final File file = File(filePath);
-
-      final FileSystemEntityType type =
-          await FileSystemEntity.type(filePath);
-
-      Log.i('$fileName type -> $type');
-
-      if (type != FileSystemEntityType.notFound &&
-          type != FileSystemEntityType.link) {
-        Log.i('find plain file -> $fileName, delete it');
-        await file.delete();
-      }
-
-      final Link link = Link(filePath);
-
-      if (link.existsSync()) {
-        link.deleteSync();
-      }
-
-      try {
-        Log.i('create link -> $fileName ${link.path}');
-        link.createSync(sourcePath);
-      } catch (e) {
-        Log.e('installAdbToEnvir error -> $e');
-      }
-    }
-  }
-
   void syncProgress() {
     progressFile.parent.createSync(recursive: true);
     progressDesFile.parent.createSync(recursive: true);
 
-    progressFile.writeAsStringSync(
-      '0',
-      flush: true,
-    );
-
-    progressDesFile.writeAsStringSync(
-      '',
-      flush: true,
-    );
+    progressFile.writeAsStringSync('0', flush: true);
+    progressDesFile.writeAsStringSync('', flush: true);
 
     progress = 0.0;
     currentProgress = '';
@@ -225,10 +98,9 @@ class HomeController extends GetxController {
 
         try {
           if (progressFile.existsSync()) {
-            final String content =
-                progressFile.readAsStringSync().trim();
-
-            final int? current = int.tryParse(content);
+            final int? current = int.tryParse(
+              progressFile.readAsStringSync().trim(),
+            );
 
             if (current != null) {
               progress = (current / step)
@@ -248,7 +120,7 @@ class HomeController extends GetxController {
 
           update();
         } catch (e) {
-          Log.e('Read startup progress failed -> $e');
+          Log.e('Read progress failed -> $e');
         } finally {
           _readingProgress = false;
         }
@@ -258,66 +130,124 @@ class HomeController extends GetxController {
     update();
   }
 
+  void setProgress(String description) {
+    currentProgress = description;
+
+    try {
+      progressDesFile.parent.createSync(recursive: true);
+      progressDesFile.writeAsStringSync(
+        description,
+        flush: true,
+      );
+    } catch (e) {
+      Log.e('Write progress description failed -> $e');
+    }
+
+    terminal.writeProgress(description);
+    update();
+  }
+
+  Future<void> initEnvir() async {
+    final List<String> androidFiles = [
+      'libbash.so',
+      'libbusybox.so',
+      'liblibtalloc.so.2.so',
+      'libloader.so',
+      'libproot.so',
+      'libsudo.so',
+    ];
+
+    final String libPath = await getLibPath();
+
+    Log.i('libPath -> $libPath');
+
+    for (final String androidFile in androidFiles) {
+      final String sourcePath = '$libPath/$androidFile';
+
+      final String fileName = androidFile.replaceAll(
+        RegExp(r'^lib|\.so$'),
+        '',
+      );
+
+      final String filePath = '${RuntimeEnvir.binPath}/$fileName';
+      final File file = File(filePath);
+
+      final FileSystemEntityType type =
+          await FileSystemEntity.type(filePath);
+
+      Log.i('$fileName type -> $type');
+
+      if (type != FileSystemEntityType.notFound &&
+          type != FileSystemEntityType.link) {
+        await file.delete();
+      }
+
+      final Link link = Link(filePath);
+
+      if (link.existsSync()) {
+        link.deleteSync();
+      }
+
+      try {
+        link.createSync(sourcePath);
+      } catch (e) {
+        Log.e('Create environment link failed -> $e');
+      }
+    }
+  }
+
   void createBusyboxLink() {
     try {
       final List<String> links = [
-        ...[
-          'awk',
-          'ash',
-          'basename',
-          'bzip2',
-          'curl',
-          'cp',
-          'chmod',
-          'cut',
-          'cat',
-          'du',
-          'dd',
-          'find',
-          'grep',
-          'gzip',
-        ],
-        ...[
-          'hexdump',
-          'head',
-          'id',
-          'lscpu',
-          'mkdir',
-          'realpath',
-          'rm',
-          'sed',
-          'stat',
-          'sh',
-          'tr',
-          'tar',
-          'uname',
-          'xargs',
-          'xz',
-          'xxd',
-        ],
+        'awk',
+        'ash',
+        'basename',
+        'bzip2',
+        'curl',
+        'cp',
+        'chmod',
+        'cut',
+        'cat',
+        'du',
+        'dd',
+        'find',
+        'grep',
+        'gzip',
+        'hexdump',
+        'head',
+        'id',
+        'lscpu',
+        'mkdir',
+        'realpath',
+        'rm',
+        'sed',
+        'stat',
+        'sh',
+        'tr',
+        'tar',
+        'uname',
+        'xargs',
+        'xz',
+        'xxd',
       ];
 
       for (final String linkName in links) {
-        final Link link = Link(
-          '${RuntimeEnvir.binPath}/$linkName',
-        );
+        final Link link =
+            Link('${RuntimeEnvir.binPath}/$linkName');
 
         if (!link.existsSync()) {
-          link.createSync(
-            '${RuntimeEnvir.binPath}/busybox',
-          );
+          link.createSync('${RuntimeEnvir.binPath}/busybox');
         }
       }
 
-      final Link fileLink = Link(
-        '${RuntimeEnvir.binPath}/file',
-      );
+      final Link fileLink =
+          Link('${RuntimeEnvir.binPath}/file');
 
       if (!fileLink.existsSync()) {
         fileLink.createSync('/system/bin/file');
       }
     } catch (e) {
-      Log.e('Create link failed -> $e');
+      Log.e('Create BusyBox links failed -> $e');
     }
   }
 
@@ -326,9 +256,15 @@ class HomeController extends GetxController {
       final PermissionStatus status =
           await Permission.manageExternalStorage.request();
 
-      Log.i('status -> $status');
+      Log.i('Storage permission -> $status');
 
       if (!status.isGranted) {
+        Log.i(
+          'Storage permission not granted; '
+          'using the default code-server version.',
+        );
+        Config.codeServerVersion =
+            Config.defaultCodeServerVersion;
         return;
       }
     }
@@ -338,22 +274,17 @@ class HomeController extends GetxController {
     try {
       if (!file.existsSync()) {
         file.createSync(recursive: true);
-
         file.writeAsStringSync(
           Config.defaultCodeServerVersion,
         );
       }
-    } catch (e) {
-      Log.e('Create code_version file failed -> $e');
-    }
 
-    try {
       if (file.existsSync()) {
         Config.codeServerVersion =
             file.readAsStringSync().trim();
       }
     } catch (e) {
-      Log.e('Read code_version file failed -> $e');
+      Log.e('Read code-server version failed -> $e');
     }
 
     if (Config.codeServerVersion.trim().isEmpty) {
@@ -366,50 +297,134 @@ class HomeController extends GetxController {
       Config.codeServerVersion !=
       Config.defaultCodeServerVersion;
 
-  void setProgress(String description) {
-    currentProgress = description;
+  Future<void> vsCodeStartWhenSuccessBind() async {
+    final Pty? pty = pseudoTerminal;
 
-    try {
-      progressDesFile.parent.createSync(recursive: true);
-
-      progressDesFile.writeAsStringSync(
-        description,
-        flush: true,
-      );
-    } catch (e) {
-      Log.e('Write startup description failed -> $e');
+    if (pty == null) {
+      setProgress('Error: la terminal PTY no se creó.');
+      return;
     }
 
-    terminal.writeProgress(description);
+    setProgress(
+      'Esperando a Code Server en el puerto ${Config.port}...',
+    );
+
+    await _terminalOutputSubscription?.cancel();
+
+    _terminalOutputSubscription = pty.output
+        .cast<List<int>>()
+        .transform(const Utf8Decoder(allowMalformed: true))
+        .listen(
+      (event) {
+        terminal.write(event);
+      },
+      onError: (Object error) {
+        Log.e('Terminal output error -> $error');
+        terminal.write('\r\nTerminal output error: $error\r\n');
+        setProgress('Error leyendo la salida de la terminal: $error');
+      },
+    );
+
+    bool serverReady = false;
+
+    for (int attempt = 0; attempt < 180; attempt++) {
+      await Future.delayed(const Duration(seconds: 1));
+
+      try {
+        final Socket socket = await Socket.connect(
+          InternetAddress.loopbackIPv4,
+          Config.port,
+          timeout: const Duration(milliseconds: 900),
+        );
+
+        socket.destroy();
+        serverReady = true;
+        break;
+      } catch (_) {
+        if (attempt % 5 == 0) {
+          setProgress(
+            'Iniciando Code Server... '
+            'esperando el puerto ${Config.port} '
+            '(${attempt + 1}/180)',
+          );
+        }
+      }
+    }
+
+    if (!serverReady) {
+      setProgress(
+        'Code Server no respondió en el puerto '
+        '${Config.port}. Revisa los errores mostrados '
+        'en la terminal.',
+      );
+
+      terminal.write(
+        '\r\nERROR: Code Server no abrió el puerto '
+        '${Config.port} tras 180 segundos.\r\n',
+      );
+
+      return;
+    }
+
+    await Future.delayed(const Duration(milliseconds: 350));
+
+    bumpProgress();
+
+    webviewHasOpen = true;
     update();
+
+    try {
+      openWebView();
+    } catch (e) {
+      webviewHasOpen = false;
+      setProgress('No se pudo abrir la WebView: $e');
+      Log.e('Open WebView failed -> $e');
+      return;
+    }
+
+    Future.delayed(const Duration(seconds: 2), () {
+      vsCodeStaring = false;
+      update();
+    });
   }
 
   Future<void> loadCodeServer() async {
-    await loadCodeVersion();
+    try {
+      await _loadCodeServer();
+    } catch (e) {
+      Log.e('Code Server startup failed -> $e');
 
+      terminal.write(
+        '\r\nSTARTUP ERROR:\r\n$e\r\n',
+      );
+
+      setProgress('Error al iniciar Code Server: $e');
+    }
+  }
+
+  Future<void> _loadCodeServer() async {
+    setProgress('Preparando el entorno...');
+
+    await loadCodeVersion();
     bumpProgress();
 
     Directory(RuntimeEnvir.tmpPath).createSync(
       recursive: true,
     );
-
     Directory(RuntimeEnvir.homePath).createSync(
       recursive: true,
     );
-
     Directory(RuntimeEnvir.binPath).createSync(
       recursive: true,
     );
 
     bumpProgress();
 
+    setProgress('Preparando los enlaces de Android...');
     await initEnvir();
-
     bumpProgress();
 
-    setProgress(
-      '${S.current.create_terminal_obj}...',
-    );
+    setProgress('${S.current.create_terminal_obj}...');
 
     pseudoTerminal = createPTY(
       rows: terminal.viewHeight,
@@ -420,13 +435,10 @@ class HomeController extends GetxController {
 
     terminal.writeProgress(
       '${S.current.current_code_version}:'
-      '${Config.codeServerVersion} '
-      '[${useCustomCodeServer ? 'custom' : ''}]',
+      '${Config.codeServerVersion}',
     );
 
-    setProgress(
-      '${S.current.copy_proot_distro}...',
-    );
+    setProgress('${S.current.copy_proot_distro}...');
 
     await AssetsUtils.copyAssetToPath(
       'assets/proot-distro.zip',
@@ -435,9 +447,7 @@ class HomeController extends GetxController {
 
     bumpProgress();
 
-    setProgress(
-      '${S.current.copy_ubuntu}...',
-    );
+    setProgress('${S.current.copy_ubuntu}...');
 
     await AssetsUtils.copyAssetToPath(
       'assets/${Config.ubuntuFileName}',
@@ -446,12 +456,8 @@ class HomeController extends GetxController {
 
     bumpProgress();
 
-    setProgress(
-      '${S.current.create_busybox_symlink}...',
-    );
-
+    setProgress('${S.current.create_busybox_symlink}...');
     createBusyboxLink();
-
     bumpProgress();
 
     final String codeServerName =
@@ -470,6 +476,13 @@ class HomeController extends GetxController {
       if (useCustomCodeServer) {
         final File sourceFile = File(sourcePath);
 
+        if (!await sourceFile.exists()) {
+          throw FileSystemException(
+            'No se encontró el paquete personalizado.',
+            sourcePath,
+          );
+        }
+
         final File targetFile = File(
           '${RuntimeEnvir.tmpPath}/$codeServerName',
         );
@@ -478,56 +491,27 @@ class HomeController extends GetxController {
           '${targetFile.path}.part',
         );
 
-        if (!await sourceFile.exists()) {
-          throw FileSystemException(
-            'No se encontró el paquete personalizado. '
-            'Comprueba que esté en /sdcard y que el '
-            'nombre sea exacto.',
-            sourcePath,
-          );
-        }
-
-        final int sourceLength =
-            await sourceFile.length();
+        final int sourceLength = await sourceFile.length();
 
         bool targetIsValid = false;
 
-        try {
-          if (await targetFile.exists()) {
-            targetIsValid =
-                await targetFile.length() == sourceLength;
-          }
-        } on FileSystemException catch (e) {
-          Log.e(
-            'Archivo temporal inválido; '
-            'se volverá a copiar -> $e',
-          );
-
-          targetIsValid = false;
+        if (await targetFile.exists()) {
+          targetIsValid =
+              await targetFile.length() == sourceLength;
         }
 
-        if (targetIsValid) {
-          Log.i(
-            'code server already copied to tmp, skip',
-          );
-        } else {
+        if (!targetIsValid) {
           if (await temporaryFile.exists()) {
             await temporaryFile.delete();
           }
 
-          await sourceFile.copy(
-            temporaryFile.path,
-          );
+          await sourceFile.copy(temporaryFile.path);
 
-          final int copiedLength =
-              await temporaryFile.length();
-
-          if (copiedLength != sourceLength) {
+          if (await temporaryFile.length() != sourceLength) {
             await temporaryFile.delete();
 
             throw FileSystemException(
-              'La copia temporal de code-server '
-              'no coincide en tamaño.',
+              'La copia de code-server tiene un tamaño incorrecto.',
               temporaryFile.path,
             );
           }
@@ -536,18 +520,7 @@ class HomeController extends GetxController {
             await targetFile.delete();
           }
 
-          await temporaryFile.rename(
-            targetFile.path,
-          );
-
-          if (!await targetFile.exists() ||
-              await targetFile.length() != sourceLength) {
-            throw FileSystemException(
-              'La copia de code-server no superó '
-              'la comprobación final.',
-              targetFile.path,
-            );
-          }
+          await temporaryFile.rename(targetFile.path);
         }
       } else {
         await AssetsUtils.copyAssetToPath(
@@ -556,27 +529,19 @@ class HomeController extends GetxController {
         );
       }
     } catch (e) {
-      Log.e('Copy code server failed -> $e');
-
       terminal.write(
-        'Copy code server failed -> $e\r\n',
+        '\r\nCopy code server failed: $e\r\n',
       );
-
-      setProgress(
-        'Error al copiar code-server: $e',
-      );
-
+      setProgress('Error al copiar code-server: $e');
       return;
     }
 
     final String codeServerPath =
         '${RuntimeEnvir.tmpPath}/$codeServerName';
 
-    setProgress(
-      '${S.current.gen_script}...',
-    );
+    setProgress('${S.current.gen_script}...');
 
-    String fixHardLinkShell = '';
+    String fixHardLinkShell;
 
     try {
       final Map<String, String> hardLinks =
@@ -584,47 +549,35 @@ class HomeController extends GetxController {
 
       fixHardLinkShell =
           genFixCodeServerHardLinkShell(hardLinks);
-
-      Log.i(
-        'fixHardLinkShell -> $fixHardLinkShell',
-      );
     } catch (e) {
       terminal.write(
-        'Get hard link failed, '
-        'will cause code-server start failed -> $e\r\n',
+        '\r\nGet hard link failed: $e\r\n',
       );
 
-      setProgress(
-        'Error al preparar enlaces de code-server: $e',
-      );
-
+      setProgress('Error preparando los enlaces: $e');
       return;
     }
 
     bumpProgress();
     bumpProgress();
 
-    vsCodeStartWhenSuccessBind();
-
-    bumpProgress();
-
-    File(
-      '${RuntimeEnvir.homePath}/common.sh',
-    ).writeAsStringSync(
+    File('${RuntimeEnvir.homePath}/common.sh')
+        .writeAsStringSync(
       '$commonScript\n$fixHardLinkShell',
     );
 
     bumpProgress();
 
     startVsCode(pseudoTerminal!);
+
+    vsCodeStartWhenSuccessBind();
   }
 
-  Future<void> startVsCode(Pty pseudoTerminal) async {
+  Future<void> startVsCode(Pty pty) async {
     vsCodeStaring = true;
-
     update();
 
-    pseudoTerminal.writeString(
+    pty.writeString(
       'source ${RuntimeEnvir.homePath}/common.sh\n'
       'start_vs_code\n',
     );
@@ -634,9 +587,8 @@ class HomeController extends GetxController {
   void onInit() {
     super.onInit();
 
-    Future.delayed(
-      Duration.zero,
-      () async {
+    Future<void>.delayed(Duration.zero, () async {
+      try {
         if (privacySetting.get() == null) {
           await Get.to(
             PrivacyAgreePage(
@@ -649,15 +601,18 @@ class HomeController extends GetxController {
         }
 
         syncProgress();
-
-        loadCodeServer();
-      },
-    );
+        await loadCodeServer();
+      } catch (e) {
+        Log.e('Initialization failed -> $e');
+        setProgress('Error de inicialización: $e');
+      }
+    });
   }
 
   @override
   void onClose() {
     _progressTimer?.cancel();
+    _terminalOutputSubscription?.cancel();
     super.onClose();
   }
 }
