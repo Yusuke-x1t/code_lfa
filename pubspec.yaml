@@ -21,13 +21,12 @@ dependencies:
   get: ^4.6.5
   device_info_plus: ^11.1.1
   tar: ^2.0.0
-  path: ^1.9.0
+  path: ^1.9.1
 
   # get repo
   xterm:
     git:
       url: https://github.com/TerminalStudio/xterm.dart
-      ref: master
   settings:
     git: https://github.com/nightmare-space/settings
   flutter_pty:
