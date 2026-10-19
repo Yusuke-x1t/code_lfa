@@ -1,5 +1,8 @@
+
+import 'package:code_lfa/utils.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:global_repository/global_repository.dart';
 import 'package:xterm/xterm.dart';
 
 import 'terminal_controller.dart';
@@ -45,8 +48,9 @@ class _TerminalPageState extends State<TerminalPage> {
                     return const SizedBox.shrink();
                   }
 
-                  final double progress =
-                      controller.progress.clamp(0.0, 1.0).toDouble();
+                  final double progress = controller.progress
+                      .clamp(0.0, 1.0)
+                      .toDouble();
 
                   final String description =
                       controller.currentProgress.trim().isEmpty
@@ -80,7 +84,8 @@ class _TerminalPageState extends State<TerminalPage> {
                                           .colorScheme
                                           .primary
                                           .withValues(alpha: 0.15),
-                                      borderRadius: BorderRadius.circular(3),
+                                      borderRadius:
+                                          BorderRadius.circular(3),
                                     ),
                                   ),
                                   AnimatedContainer(
@@ -93,14 +98,16 @@ class _TerminalPageState extends State<TerminalPage> {
                                       color: Theme.of(context)
                                           .colorScheme
                                           .primary,
-                                      borderRadius: BorderRadius.circular(3),
+                                      borderRadius:
+                                          BorderRadius.circular(3),
                                     ),
                                   ),
                                 ],
                               ),
                               const SizedBox(height: 10),
                               Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
                                 children: [
                                   Expanded(
                                     child: Text(
