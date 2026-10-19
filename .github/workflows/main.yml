@@ -10,48 +10,135 @@ jobs:
   build:
     name: Build & Release
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
 
-      - name: Extract version from pubspec.yaml
-        id: extract_version
+      - name: Read App Version
+        shell: bash
         run: |
-          version=$(grep '^version: ' pubspec.yaml | cut -d ' ' -f 2 | tr -d '\r')
-          echo "VERSION=$version" >> "$GITHUB_ENV"
+          set -euo pipefail
 
-          code_server=$(grep '^code_server: ' pubspec.yaml | cut -d ' ' -f 2 | tr -d '\r')
-          echo "CSVERSION=$code_server" >> "$GITHUB_ENV"
+          app_version="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -n 1 | tr -d '\r')"
 
-      - name: Download code-server
+          if [[ -z "$app_version" ]]; then
+            echo "::error::No se encontró version en pubspec.yaml"
+            exit 1
+          fi
+
+          echo "APP_VERSION=$app_version" >> "$GITHUB_ENV"
+          echo "Version de CodeFA: $app_version"
+
+      - name: Download Latest Stable code-server
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          wget -O "assets/code-server-${{ env.CSVERSION }}-linux-arm64.tar.gz" \
-            "https://github.com/coder/code-server/releases/download/v${{ env.CSVERSION }}/code-server-${{ env.CSVERSION }}-linux-arm64.tar.gz"
+          set -euo pipefail
+
+          release_json="$(curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --retry 3 \
+            --retry-delay 2 \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/coder/code-server/releases/latest")"
+
+          tag_name="$(jq -er '.tag_name' <<< "$release_json")"
+          CSVERSION="${tag_name#v}"
+
+          if [[ -z "$CSVERSION" ]]; then
+            echo "::error::No se pudo obtener la version de code-server"
+            exit 1
+          fi
+
+          asset_name="code-server-${CSVERSION}-linux-arm64.tar.gz"
+
+          download_url="$(jq -er \
+            --arg name "$asset_name" \
+            '.assets[] | select(.name == $name) | .browser_download_url' \
+            <<< "$release_json")"
+
+          asset_digest="$(jq -r \
+            --arg name "$asset_name" \
+            '.assets[] | select(.name == $name) | (.digest // "")' \
+            <<< "$release_json")"
+
+          mkdir -p assets
+
+          echo "Descargando code-server ${CSVERSION}"
+          echo "Archivo: ${asset_name}"
+
+          curl \
+            --fail \
+            --location \
+            --show-error \
+            --retry 3 \
+            --retry-delay 2 \
+            "$download_url" \
+            --output "assets/$asset_name"
+
+          if [[ ! -s "assets/$asset_name" ]]; then
+            echo "::error::El archivo descargado esta vacio"
+            exit 1
+          fi
+
+          if [[ "$asset_digest" == sha256:* ]]; then
+            expected_hash="${asset_digest#sha256:}"
+
+            printf '%s  %s\n' \
+              "$expected_hash" \
+              "assets/$asset_name" \
+              | sha256sum --check
+          else
+            echo "::warning::GitHub no publico SHA-256 para este archivo"
+          fi
+
+          echo "CSVERSION=$CSVERSION" >> "$GITHUB_ENV"
+
+          echo "code-server seleccionado: ${CSVERSION}"
 
       - name: Set Up Java
         uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Set Up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.47.0'
+          flutter-version: "3.47.0"
           channel: stable
+          cache: true
 
       - name: Check Toolchain
+        shell: bash
         run: |
+          set -euo pipefail
+
           flutter --version
           dart --version
           java -version
+          gradle_version="$(grep '^distributionUrl=' android/gradle/wrapper/gradle-wrapper.properties)"
+          echo "$gradle_version"
 
       - name: Install Dependencies
-        run: flutter pub get
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter pub get
 
       - name: Generate Temporary Signing Key
+        shell: bash
         run: |
+          set -euo pipefail
+
           rm -f android/app/keystore.jks android/key.properties
 
           keytool -genkeypair \
@@ -73,39 +160,88 @@ jobs:
           storeFile=keystore.jks
           EOF
 
+          test -s android/app/keystore.jks
+          test -s android/key.properties
+
       - name: Build APK
+        shell: bash
         run: |
-          flutter build apk --release --split-per-abi \
-            --dart-define=VERSION="${{ env.VERSION }}" \
-            --dart-define=CSVERSION="${{ env.CSVERSION }}"
+          set -euo pipefail
 
-      - name: Modify Tag
-        id: modify_tag
+          echo "Compilando CodeFA ${APP_VERSION}"
+          echo "Version integrada de code-server: ${CSVERSION}"
+
+          flutter build apk \
+            --release \
+            --split-per-abi \
+            --dart-define="VERSION=${APP_VERSION}" \
+            --dart-define="CSVERSION=${CSVERSION}"
+
+      - name: Set Release Version
+        shell: bash
         run: |
-          new_version="${{ env.VERSION }}-build-${{ github.run_number }}"
-          echo "VERSION=$new_version" >> "$GITHUB_ENV"
+          set -euo pipefail
 
-      - name: Rename Artifacts
+          release_version="${APP_VERSION}-build-${GITHUB_RUN_NUMBER}"
+
+          echo "RELEASE_VERSION=$release_version" >> "$GITHUB_ENV"
+          echo "Version de publicacion: $release_version"
+
+      - name: Rename APKs
+        shell: bash
         run: |
-          mv build/app/outputs/apk/release/app-arm64-*release.apk \
-            "build/app/outputs/apk/release/CodeFA_${{ env.VERSION }}_Android_arm64.apk"
+          set -euo pipefail
 
-          mv build/app/outputs/apk/release/app-armeabi-*release.apk \
-            "build/app/outputs/apk/release/CodeFA_${{ env.VERSION }}_Android_arm_v7a.apk"
+          apk_dir="build/app/outputs/apk/release"
 
-          mv build/app/outputs/apk/release/app-x86_64-*release.apk \
-            "build/app/outputs/apk/release/CodeFA_${{ env.VERSION }}_Android_x86_64.apk"
+          shopt -s nullglob
+
+          arm64_apks=("$apk_dir"/app-arm64-*release.apk)
+          armv7_apks=("$apk_dir"/app-armeabi-*release.apk)
+          x86_apks=("$apk_dir"/app-x86_64-*release.apk)
+
+          if [[ ${#arm64_apks[@]} -ne 1 ]]; then
+            echo "::error::Se esperaba exactamente un APK arm64"
+            ls -lah "$apk_dir" || true
+            exit 1
+          fi
+
+          if [[ ${#armv7_apks[@]} -ne 1 ]]; then
+            echo "::error::Se esperaba exactamente un APK armeabi-v7a"
+            ls -lah "$apk_dir" || true
+            exit 1
+          fi
+
+          if [[ ${#x86_apks[@]} -ne 1 ]]; then
+            echo "::error::Se esperaba exactamente un APK x86_64"
+            ls -lah "$apk_dir" || true
+            exit 1
+          fi
+
+          mv "${arm64_apks[0]}" \
+            "$apk_dir/CodeFA_${RELEASE_VERSION}_Android_arm64.apk"
+
+          mv "${armv7_apks[0]}" \
+            "$apk_dir/CodeFA_${RELEASE_VERSION}_Android_arm_v7a.apk"
+
+          mv "${x86_apks[0]}" \
+            "$apk_dir/CodeFA_${RELEASE_VERSION}_Android_x86_64.apk"
+
+          echo "APK generados:"
+          ls -lh "$apk_dir"/CodeFA_*_Android_*.apk
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: Releases
-          path: |
-            build/app/outputs/apk/release/*_arm64.apk
+          name: CodeFA-${{ env.RELEASE_VERSION }}
+          path: build/app/outputs/apk/release/CodeFA_*_Android_arm64.apk
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "build/app/outputs/apk/release/*_arm64.apk"
-          tag: v${{ env.VERSION }}
+          artifacts: "build/app/outputs/apk/release/CodeFA_*_Android_arm64.apk"
+          tag: "v${{ env.RELEASE_VERSION }}"
+          name: "CodeFA ${{ env.RELEASE_VERSION }}"
           token: ${{ github.token }}
