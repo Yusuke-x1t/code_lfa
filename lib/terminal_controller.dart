@@ -33,8 +33,6 @@ class HomeController extends GetxController {
   double step = 17;
   String currentProgress = '';
 
-  // 进度 +1
-  // Progress +1
   void bumpProgress() {
     try {
       int current = 0;
@@ -53,8 +51,6 @@ class HomeController extends GetxController {
     update();
   }
 
-  // 监听输出，当输出中包含启动成功的标志时，启动 Code Server
-  // Listen for output and start the Code Server when the success flag is detected
   Future<void> vsCodeStartWhenSuccessBind() async {
     terminal.writeProgress('${S.current.listen_vscode_start}...');
     final Completer completer = Completer();
@@ -85,26 +81,26 @@ class HomeController extends GetxController {
     });
   }
 
-  // 初始化环境，将动态库中的文件链接到数据目录
-  // Init environment and link files from the dynamic library to the data directory
   Future<void> initEnvir() async {
-    List<String> androidFiles = ['libbash.so', 'libbusybox.so', 'liblibtalloc.so.2.so', 'libloader.so', 'libproot.so', 'libsudo.so'];
+    List<String> androidFiles = [
+      'libbash.so',
+      'libbusybox.so',
+      'liblibtalloc.so.2.so',
+      'libloader.so',
+      'libproot.so',
+      'libsudo.so'
+    ];
     String libPath = await getLibPath();
     Log.i('libPath -> $libPath');
 
     for (int i = 0; i < androidFiles.length; i++) {
-      // when android target sdk > 28
-      // cannot execute file in /data/data/com.xxx/files/usr/bin
-      // so we need create a link to /data/data/com.xxx/files/usr/bin
       final sourcePath = '$libPath/${androidFiles[i]}';
       String fileName = androidFiles[i].replaceAll(RegExp('^lib|\\.so\$'), '');
       String filePath = '${RuntimeEnvir.binPath}/$fileName';
-      // custom path, termux-api will invoke
       File file = File(filePath);
       FileSystemEntityType type = await FileSystemEntity.type(filePath);
       Log.i('$fileName type -> $type');
       if (type != FileSystemEntityType.notFound && type != FileSystemEntityType.link) {
-        // old version adb is plain file
         Log.i('find plain file -> $fileName, delete it');
         await file.delete();
       }
@@ -121,8 +117,6 @@ class HomeController extends GetxController {
     }
   }
 
-  // 同步当前进度
-  // Sync the current progress
   void syncProgress() {
     progressFile.createSync(recursive: true);
     progressFile.writeAsStringSync('0');
@@ -149,8 +143,6 @@ class HomeController extends GetxController {
     });
   }
 
-  // 创建 busybox 的软连接，来确保 proot-distro 会用到的命令正常运行
-  // create busybox symlinks, to ensure proot-distro can use the commands normally
   void createBusyboxLink() {
     try {
       List<String> links = [
@@ -179,17 +171,26 @@ class HomeController extends GetxController {
         return;
       }
     }
-    File file = File('/sdcard/code_version');
+
+    final File file = File('/sdcard/code_version');
     try {
       if (!file.existsSync()) {
-        file.createSync();
+        file.createSync(recursive: true);
         file.writeAsStringSync(Config.defaultCodeServerVersion);
       }
     } catch (e) {
       Log.e('Create code_version file failed -> $e');
     }
-    if (file.existsSync()) Config.codeServerVersion = file.readAsStringSync();
-    if (Config.codeServerVersion.isEmpty) {
+
+    try {
+      if (file.existsSync()) {
+        Config.codeServerVersion = file.readAsStringSync().trim();
+      }
+    } catch (e) {
+      Log.e('Read code_version file failed -> $e');
+    }
+
+    if (Config.codeServerVersion.trim().isEmpty) {
       Config.codeServerVersion = Config.defaultCodeServerVersion;
     }
   }
@@ -204,46 +205,87 @@ class HomeController extends GetxController {
   Future<void> loadCodeServer() async {
     await loadCodeVersion();
     bumpProgress();
-    // 创建相关文件夹
-    // Create related folders
     Directory(RuntimeEnvir.tmpPath).createSync(recursive: true);
     Directory(RuntimeEnvir.homePath).createSync(recursive: true);
     Directory(RuntimeEnvir.binPath).createSync(recursive: true);
     bumpProgress();
     await initEnvir();
     bumpProgress();
-    // -
+
     setProgress('${S.current.create_terminal_obj}...');
     pseudoTerminal = createPTY(rows: terminal.viewHeight, columns: terminal.viewWidth);
     bumpProgress();
-    // -
+
     terminal.writeProgress('${S.current.current_code_version}:${Config.codeServerVersion} [${useCustomCodeServer ? 'custom' : ''}]');
     setProgress('${S.current.copy_proot_distro}...');
     await AssetsUtils.copyAssetToPath('assets/proot-distro.zip', '${RuntimeEnvir.homePath}/proot-distro.zip');
     bumpProgress();
-    // -
+
     setProgress('${S.current.copy_ubuntu}...');
     await AssetsUtils.copyAssetToPath('assets/${Config.ubuntuFileName}', '${RuntimeEnvir.homePath}/${Config.ubuntuFileName}');
     bumpProgress();
-    // -
+
     setProgress('${S.current.create_busybox_symlink}...');
     createBusyboxLink();
     bumpProgress();
-    // -
-    String codeServerName = 'code-server-${Config.codeServerVersion}-linux-arm64.tar.gz';
-    String sourcePath = useCustomCodeServer ? '/sdcard/$codeServerName' : 'assets/$codeServerName';
+
+    final String codeServerName = 'code-server-${Config.codeServerVersion}-linux-arm64.tar.gz';
+    final String sourcePath = useCustomCodeServer ? '/sdcard/$codeServerName' : 'assets/$codeServerName';
     setProgress('${S.current.copy_code_server('[$sourcePath]')} ${RuntimeEnvir.tmpPath}...');
+
     try {
       if (useCustomCodeServer) {
-        File codeServerOnSdcard = File(sourcePath);
-        File targetFile = File('${RuntimeEnvir.tmpPath}/$codeServerName');
-        if (targetFile.existsSync() && targetFile.lengthSync() == codeServerOnSdcard.lengthSync()) {
+        final File sourceFile = File(sourcePath);
+        final File targetFile = File('${RuntimeEnvir.tmpPath}/$codeServerName');
+        final File temporaryFile = File('${targetFile.path}.part');
+
+        if (!await sourceFile.exists()) {
+          throw FileSystemException(
+            'No se encontró el paquete personalizado. Comprueba que esté en /sdcard y que el nombre sea exacto.',
+            sourcePath,
+          );
+        }
+
+        final int sourceLength = await sourceFile.length();
+        bool targetIsValid = false;
+
+        try {
+          if (await targetFile.exists()) {
+            targetIsValid = await targetFile.length() == sourceLength;
+          }
+        } on FileSystemException catch (e) {
+          Log.e('Archivo temporal inválido; se volverá a copiar -> $e');
+          targetIsValid = false;
+        }
+
+        if (targetIsValid) {
           Log.i('code server already copied to tmp, skip');
         } else {
-          if (targetFile.existsSync()) {
-            targetFile.deleteSync();
+          if (await temporaryFile.exists()) {
+            await temporaryFile.delete();
           }
-          await codeServerOnSdcard.copy(targetFile.path);
+
+          await sourceFile.copy(temporaryFile.path);
+          final int copiedLength = await temporaryFile.length();
+          if (copiedLength != sourceLength) {
+            await temporaryFile.delete();
+            throw FileSystemException(
+              'La copia temporal de code-server no coincide en tamaño.',
+              temporaryFile.path,
+            );
+          }
+
+          if (await targetFile.exists()) {
+            await targetFile.delete();
+          }
+          await temporaryFile.rename(targetFile.path);
+
+          if (!await targetFile.exists() || await targetFile.length() != sourceLength) {
+            throw FileSystemException(
+              'La copia de code-server no superó la comprobación final.',
+              targetFile.path,
+            );
+          }
         }
       } else {
         await AssetsUtils.copyAssetToPath(
@@ -253,11 +295,11 @@ class HomeController extends GetxController {
       }
     } catch (e) {
       Log.e('Copy code server failed -> $e');
-      terminal.write('Copy code server failed -> $e');
+      terminal.write('Copy code server failed -> $e\r\n');
       return;
     }
-    // -
-    final codeServerPath = '${RuntimeEnvir.tmpPath}/$codeServerName';
+
+    final String codeServerPath = '${RuntimeEnvir.tmpPath}/$codeServerName';
     setProgress('${S.current.gen_script}...');
     String fixHardLinkShell = '';
     try {
@@ -270,7 +312,7 @@ class HomeController extends GetxController {
     }
     bumpProgress();
     bumpProgress();
-    // -
+
     vsCodeStartWhenSuccessBind();
     bumpProgress();
     File('${RuntimeEnvir.homePath}/common.sh').writeAsStringSync('$commonScript\n$fixHardLinkShell');
@@ -282,14 +324,11 @@ class HomeController extends GetxController {
     vsCodeStaring = true;
     update();
     pseudoTerminal.writeString('source ${RuntimeEnvir.homePath}/common.sh\nstart_vs_code\n');
-    // pseudoTerminal.writeString('bash\n');
   }
 
   @override
   void onInit() {
     super.onInit();
-    // 为 Google Play 上架做准备
-    // For Google Play
     Future.delayed(Duration.zero, () async {
       if (privacySetting.get() == null) {
         await Get.to(PrivacyAgreePage(
