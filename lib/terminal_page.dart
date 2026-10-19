@@ -48,9 +48,8 @@ class _TerminalPageState extends State<TerminalPage> {
                     return const SizedBox.shrink();
                   }
 
-                  final double progress = controller.progress
-                      .clamp(0.0, 1.0)
-                      .toDouble();
+                  final double progress =
+                      controller.progress.clamp(0.0, 1.0).toDouble();
 
                   final String description =
                       controller.currentProgress.trim().isEmpty
@@ -69,7 +68,7 @@ class _TerminalPageState extends State<TerminalPage> {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              LoadingProgress(
+                              const LoadingProgress(
                                 minRadius: 6,
                                 strokeWidth: 3,
                                 increaseRadius: 3,
@@ -112,7 +111,7 @@ class _TerminalPageState extends State<TerminalPage> {
                                   Expanded(
                                     child: Text(
                                       description,
-                                      maxLines: 3,
+                                      maxLines: 4,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
                                         fontSize: 12,
